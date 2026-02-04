@@ -10,7 +10,7 @@ const server = http.createServer(app);
 
 // Enhanced CORS configuration
 const corsOptions = {
-  origin: ['https://qrguard-chat.netlify.app/', 'http://localhost:5173'],
+  origin: ['https://qrguard-chat.netlify.app', 'http://localhost:5173'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Session-ID'],
   credentials: true,
