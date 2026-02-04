@@ -2,13 +2,13 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const http = require('http');
-const socketIo = require('socket.io');
+const { Server } = require('socket.io');
 require('dotenv').config();
 
 const app = express();
 const server = http.createServer(app);
 
-// Enhanced CORS configuration
+// ===== CORS CONFIGURATION =====
 const corsOptions = {
   origin: ['https://qrguard-chat.netlify.app', 'http://localhost:5173'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -17,15 +17,20 @@ const corsOptions = {
   optionsSuccessStatus: 200
 };
 
-// Use CORS middleware
+// Middlewares
 app.use(cors(corsOptions));
-
-// Other middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Database Connection
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/qrguard';
+// ===== DATABASE CONNECTION (FIXED) =====
+const MONGODB_URI = process.env.MONGODB_URI;
+
+console.log("🗄️ Loaded MongoDB URI from ENV:", MONGODB_URI ? "FOUND" : "NOT FOUND");
+
+if (!MONGODB_URI) {
+  console.error("❌ MONGODB_URI not defined in environment variables!");
+  process.exit(1);
+}
 
 mongoose.connect(MONGODB_URI)
   .then(() => {
@@ -38,10 +43,10 @@ mongoose.connect(MONGODB_URI)
 const db = mongoose.connection;
 db.on('error', console.error.bind(console, 'MongoDB connection error:'));
 db.once('open', () => {
-  console.log('✅ Connected to MongoDB');
+  console.log('✅ MongoDB connection open');
 });
 
-// Test route to verify CORS
+// ===== TEST ROUTES =====
 app.get('/api/test-cors', (req, res) => {
   res.json({
     message: 'CORS is working!',
@@ -50,7 +55,6 @@ app.get('/api/test-cors', (req, res) => {
   });
 });
 
-// Test route
 app.get('/api/test', (req, res) => {
   res.json({
     message: 'QR Guard Backend API is working!',
@@ -59,15 +63,14 @@ app.get('/api/test', (req, res) => {
   });
 });
 
-// Import Routes
+// ===== IMPORT ROUTES =====
 const chatRoutes = require('./routes/chatRoutes');
 const vehicleRoutes = require('./routes/vehicleRoutes');
 
-// Use Routes
 app.use('/api/chats', chatRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 
-// Health Check Endpoint
+// ===== HEALTH CHECK =====
 app.get('/health', (req, res) => {
   res.json({ 
     status: 'OK', 
@@ -77,7 +80,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// Error handling middleware
+// ===== ERROR HANDLING =====
 app.use((err, req, res, next) => {
   console.error('❌ Error:', err.message);
   res.status(500).json({
@@ -87,31 +90,40 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Socket.io setup with CORS
-const io = socketIo(server, {
+// ===== SOCKET.IO CONFIG (FULLY FIXED FOR RENDER) =====
+const io = new Server(server, {
   cors: {
     origin: corsOptions.origin,
-    methods: corsOptions.methods,
-    credentials: corsOptions.credentials
-  }
+    methods: ["GET", "POST"],
+    credentials: true
+  },
+  transports: ["websocket", "polling"],
+  allowEIO3: true,
+  pingTimeout: 60000,
+  pingInterval: 25000
 });
 
 const Chat = require('./models/Chat');
 const { v4: uuidv4 } = require('uuid');
 
-// Store active chat timers
 const chatTimers = new Map();
-// socket setup in server.js - UPDATED SOCKET HANDLERS
+
+// ===== SOCKET LOGIC (ALL YOUR FEATURES KEPT) =====
 io.on('connection', (socket) => {
   console.log('✅ New client connected:', socket.id);
-  
+  console.log("🔌 Transport:", socket.conn.transport.name);
+
+  socket.conn.on("upgrade", (transport) => {
+    console.log("⬆️ Transport upgraded to:", transport.name);
+  });
+
   // Join chat room
   socket.on('join-chat', (chatId) => {
     socket.join(chatId);
     console.log(`✅ Socket ${socket.id} joined chat: ${chatId}`);
   });
 
-  // Send message - FIXED TO PREVENT DUPLICATES
+  // Send message
   socket.on('send-message', async (data) => {
     try {
       console.log('📨 Received message data:', data);
@@ -119,20 +131,17 @@ io.on('connection', (socket) => {
       const { chatId, senderType, content, language, isPredefined, sessionId } = data;
       
       if (!chatId || !senderType || !content || !sessionId) {
-        console.error('❌ Missing required fields:', { chatId, senderType, content, sessionId });
         socket.emit('error', { message: 'Missing required fields' });
         return;
       }
       
       const chat = await Chat.findOne({ chatId });
       if (!chat) {
-        console.error('❌ Chat not found:', chatId);
         socket.emit('error', { message: 'Chat not found' });
         return;
       }
 
       if (chat.status !== 'active') {
-        console.error('❌ Chat not active:', chat.status);
         socket.emit('error', { message: 'Chat is not active' });
         return;
       }
@@ -144,39 +153,27 @@ io.on('connection', (socket) => {
         content: content.trim(),
         language: language || 'en',
         isPredefined: isPredefined || false,
-        sessionId: sessionId || 'unknown',
+        sessionId,
         timestamp: new Date()
       };
-      
-      console.log('💾 Saving message to DB:', message);
       
       chat.messages.push(message);
       await chat.save();
       
-      console.log('✅ Message saved to DB:', messageId);
-      
-      // Create response with chatId included for frontend
-      const responseMessage = {
+      io.to(chatId).emit('receive-message', {
         ...message,
-        chatId: chatId // Include chatId in response
-      };
-      
-      // Emit to all in the chat room
-      io.to(chatId).emit('receive-message', responseMessage);
+        chatId
+      });
       
     } catch (error) {
       console.error('❌ Error sending message:', error.message);
-      console.error('Full error:', error);
-      socket.emit('error', { message: 'Failed to send message: ' + error.message });
+      socket.emit('error', { message: 'Failed to send message' });
     }
   });
 
-  // Handle mobile request from owner
+  // Mobile request
   socket.on('request-mobile', async ({ chatId, requestId, requestedBy }) => {
     try {
-      console.log(`📱 Mobile request for chat: ${chatId}`);
-      
-      // Emit to all except sender (owner emits, reporter receives)
       socket.to(chatId).emit('mobile-requested', { 
         chatId, 
         requestId, 
@@ -187,12 +184,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle mobile response from reporter
+  // Mobile response
   socket.on('respond-mobile', async ({ chatId, requestId, status, mobileNumber }) => {
     try {
-      console.log(`📱 Mobile response for chat: ${chatId}`, { status });
-      
-      // Emit to all in chat room
       io.to(chatId).emit('mobile-responded', { 
         chatId, 
         requestId, 
@@ -204,29 +198,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle mobile request
-  socket.on('request-mobile', async ({ chatId }) => {
-    try {
-      console.log(`📱 Mobile request for chat: ${chatId}`);
-      
-      const chat = await Chat.findOne({ chatId });
-      if (chat) {
-        chat.requester.mobileRequested = true;
-        await chat.save();
-        
-        // Emit to all except sender
-        socket.to(chatId).emit('mobile-requested', { chatId });
-      }
-    } catch (error) {
-      console.error('❌ Error handling mobile request:', error);
-    }
-  });
-
-  // Handle mobile approval
+  // Approve mobile
   socket.on('approve-mobile', async ({ chatId, mobileNumber }) => {
     try {
-      console.log(`✅ Mobile approved for chat: ${chatId}`);
-      
       const chat = await Chat.findOne({ chatId });
       if (chat) {
         chat.requester.mobileNumber = mobileNumber;
@@ -240,11 +214,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle chat approval
+  // Chat approval
   socket.on('chat-approved', async ({ chatId, ownerName, ownerSessionId }) => {
     try {
-      console.log(`✅ Chat approved: ${chatId}`);
-      
       const chat = await Chat.findOne({ chatId });
       if (chat) {
         chat.status = 'active';
@@ -265,11 +237,9 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Handle chat end
+  // End chat
   socket.on('end-chat', async ({ chatId }) => {
     try {
-      console.log(`⏹️ Chat ended: ${chatId}`);
-      
       const chat = await Chat.findOne({ chatId });
       if (chat && chat.status === 'active') {
         chat.status = 'completed';
@@ -292,7 +262,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// 404 handler
+// ===== 404 HANDLER =====
 app.use((req, res) => {
   res.status(404).json({
     success: false,
@@ -301,11 +271,12 @@ app.use((req, res) => {
   });
 });
 
+// ===== START SERVER =====
 const PORT = process.env.PORT || 5000;
+
 server.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   console.log(`📡 WebSocket server ready`);
   console.log(`🌐 Allowed Origins: ${corsOptions.origin.join(', ')}`);
-  console.log(`🗄️  MongoDB URI: ${MONGODB_URI}`);
   console.log(`🕐 Server started at: ${new Date().toISOString()}`);
 });
