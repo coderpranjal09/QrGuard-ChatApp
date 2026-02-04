@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+/* Custom Animations */
+@keyframes fadeInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spin-slow {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse-slow {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.animate-fadeInDown {
+  animation: fadeInDown 0.3s ease-out;
+}
+
+.animate-slideInRight {
+  animation: slideInRight 0.3s ease-out;
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.3s ease-out;
+}
+
+.animate-spin-slow {
+  animation: spin-slow 3s linear infinite;
+}
+
+.animate-pulse-slow {
+  animation: pulse-slow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+/* Message Bubble Styles */
+.message-bubble-sent {
+  position: relative;
+}
+
+.message-bubble-sent:before {
+  content: '';
+  position: absolute;
+  right: -8px;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-left: 8px solid #3b82f6;
+  border-top: 8px solid #3b82f6;
+  border-bottom: 8px solid transparent;
+  border-right: 8px solid transparent;
+}
+
+.message-bubble-received {
+  position: relative;
+}
+
+.message-bubble-received:before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 0;
+  width: 0;
+  height: 0;
+  border-right: 8px solid #f3f4f6;
+  border-top: 8px solid #f3f4f6;
+  border-bottom: 8px solid transparent;
+  border-left: 8px solid transparent;
+}
+
+/* Custom Scrollbar */
+.scroll-smooth {
+  scroll-behavior: smooth;
+}
+
+.scroll-smooth::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scroll-smooth::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 3px;
+}
+
+.scroll-smooth::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 3px;
+}
+
+.scroll-smooth::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Mobile Optimizations */
+@media (max-width: 768px) {
+  .message-bubble-sent:before,
+  .message-bubble-received:before {
+    display: none;
+  }
+  
+  .scroll-smooth::-webkit-scrollbar {
+    width: 4px;
+  }
+}
