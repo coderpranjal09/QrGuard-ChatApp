@@ -20,10 +20,14 @@ export const ChatProvider = ({ children }) => {
     setLoading(true)
     try {
       const response = await chatService.createChatRequest(vehicleNumber)
-      toast.success('Chat request created successfully!')
+      if (response.isExisting) {
+        toast.success('Joined existing active chat!')
+      } else {
+        toast.success('Chat created successfully!')
+      }
       return response
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to create chat request')
+      toast.error(error.response?.data?.message || 'Failed to create chat')
       throw error
     } finally {
       setLoading(false)
@@ -34,10 +38,27 @@ export const ChatProvider = ({ children }) => {
     setLoading(true)
     try {
       const response = await chatService.getChatRequests(vehicleNumber)
-      return response.requests
+      console.log('ChatContext: API Response:', response) // Debug log
+      
+      // Handle both old and new response structures
+      if (response && response.success) {
+        // Return chats if available, otherwise requests for backward compatibility
+        const chats = response.chats || response.requests || []
+        return {
+          success: true,
+          chats: chats,
+          requests: chats, // Keep both for backward compatibility
+          message: response.message || `Found ${chats.length} active chat(s)`
+        }
+      }
+      return { success: false, message: response?.message || 'No chats found' }
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to fetch requests')
-      throw error
+      console.error('ChatContext Error:', error)
+      toast.error(error.response?.data?.message || 'Failed to fetch chats')
+      return { 
+        success: false, 
+        message: error.response?.data?.message || 'Failed to fetch chats' 
+      }
     } finally {
       setLoading(false)
     }
@@ -47,10 +68,24 @@ export const ChatProvider = ({ children }) => {
     setLoading(true)
     try {
       const response = await chatService.approveChatRequest(chatId, ownerName)
-      toast.success('Chat approved! Redirecting to chat...')
+      toast.success(response.isExisting ? 'Rejoined chat!' : 'Joined chat!')
       return response
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Failed to approve chat')
+      toast.error(error.response?.data?.message || 'Failed to join chat')
+      throw error
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const joinAsOwner = async (chatId, ownerName) => {
+    setLoading(true)
+    try {
+      const response = await chatService.joinAsOwner(chatId, ownerName)
+      toast.success('Joined chat as owner!')
+      return response
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to join as owner')
       throw error
     } finally {
       setLoading(false)
@@ -81,6 +116,7 @@ export const ChatProvider = ({ children }) => {
         createChatRequest,
         getChatRequests,
         approveChatRequest,
+        joinAsOwner,
         addActiveChat,
         removeActiveChat,
         clearAllChats,

@@ -1,5 +1,4 @@
-// hooks/useChat.js - COMPLETE FIXED VERSION
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSocket } from '../contexts/SocketContext'
 import { chatService } from '../services/chatService'
 import { toast } from 'react-hot-toast'
@@ -9,6 +8,9 @@ export const useChat = (chatId) => {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const { socket, joinChat, isConnected } = useSocket()
+  
+  const processingMessages = useRef(new Set())
+  const retryCount = useRef(0)
 
   const loadChat = useCallback(async () => {
     if (!chatId) return
@@ -23,15 +25,29 @@ export const useChat = (chatId) => {
       // Join chat room with session if chat is active
       if (response.chat.status === 'active') {
         const sessionId = localStorage.getItem('qrguard_session')
+        const userType = localStorage.getItem('qrguard_userType')
+        
         if (socket && sessionId) {
-          console.log(`🎯 Joining chat ${chatId} as ${response.chat.status}`)
-          joinChat(chatId)
+          console.log(`🎯 Joining chat ${chatId} as ${userType} with session ${sessionId}`)
+          joinChat(chatId, sessionId)
         }
       }
+      
+      retryCount.current = 0
     } catch (err) {
-      setError(err.message)
-      toast.error('Failed to load chat')
       console.error('Error loading chat:', err)
+      setError(err.message)
+      
+      // Retry logic
+      if (retryCount.current < 3) {
+        retryCount.current++
+        setTimeout(() => {
+          console.log(`🔄 Retry ${retryCount.current} loading chat`)
+          loadChat()
+        }, 1000 * retryCount.current)
+      } else {
+        toast.error('Failed to load chat. Please refresh.')
+      }
     } finally {
       setLoading(false)
     }
@@ -45,11 +61,14 @@ export const useChat = (chatId) => {
       return
     }
 
-    // Flag to prevent duplicate processing
-    const processingFlags = new Set()
-
+    // Handle new messages
     const handleNewMessage = (message) => {
-      console.log('📨 New message via WebSocket:', message)
+      console.log('📨 [HOOK] New message received:', {
+        chatId: message.chatId,
+        messageId: message._id,
+        content: message.content?.substring(0, 50),
+        fromSocketId: message.fromSocketId
+      })
       
       // Only process if message belongs to current chat
       if (message.chatId !== chatId) {
@@ -58,48 +77,52 @@ export const useChat = (chatId) => {
       }
       
       // Prevent duplicate processing
-      const messageKey = `${message.chatId}_${message._id || message.content}_${message.timestamp}`
-      if (processingFlags.has(messageKey)) {
+      const messageKey = `${message._id}_${message.timestamp}`
+      if (processingMessages.current.has(messageKey)) {
         console.log('⚠️ Already processing this message, skipping')
         return
       }
       
-      processingFlags.add(messageKey)
+      processingMessages.current.add(messageKey)
       
       setChat(prev => {
-        if (!prev) return prev
+        if (!prev) {
+          // If no chat yet, load it
+          loadChat()
+          return prev
+        }
         
         // Check if message already exists
-        const messageExists = prev.messages?.some(m => {
-          // Check by ID
-          if (m._id === message._id) return true
-          // Check by content and timestamp (for temp messages)
-          if (m.content === message.content && 
-              new Date(m.timestamp).getTime() === new Date(message.timestamp).getTime()) {
-            return true
-          }
-          return false
-        })
+        const messageExists = prev.messages?.some(m => 
+          m._id === message._id || 
+          (m.__temp && m.content === message.content && 
+           Math.abs(new Date(m.timestamp).getTime() - new Date(message.timestamp).getTime()) < 1000)
+        )
         
         if (messageExists) {
-          console.log('⚠️ Message already exists, skipping')
-          return prev
+          console.log('⚠️ Message already exists, replacing temp')
+          return {
+            ...prev,
+            messages: prev.messages.map(m => 
+              m.__temp && m.content === message.content ? message : m
+            )
+          }
         }
         
         console.log('✅ Adding new message to chat')
         return {
           ...prev,
-          messages: [...(prev?.messages || []), {
+          messages: [...(prev.messages || []), {
             ...message,
             timestamp: new Date(message.timestamp)
           }]
         }
       })
       
-      // Clean up processing flag after 1 second
+      // Clean up processing flag
       setTimeout(() => {
-        processingFlags.delete(messageKey)
-      }, 1000)
+        processingMessages.current.delete(messageKey)
+      }, 5000)
     }
 
     const handleChatEnded = (data) => {
@@ -107,10 +130,12 @@ export const useChat = (chatId) => {
         console.log('⏹️ Chat ended:', chatId)
         setChat(prev => ({ 
           ...prev, 
-          status: 'completed',
-          endedAt: new Date().toISOString()
+          status: 'completed'
         }))
-        toast.success('Chat ended')
+        toast('🔒 Chat ended', {
+          icon: '🔒',
+          duration: 3000
+        })
       }
     }
 
@@ -124,18 +149,10 @@ export const useChat = (chatId) => {
             ...prev.owner,
             name: data.ownerName,
             sessionId: data.ownerSessionId
-          }
+          },
+          isOwnerJoined: true
         }))
-        toast.success('Chat approved! You can now start chatting.')
-        
-        // If current user is owner, join the chat
-        const userType = localStorage.getItem('qrguard_userType')
-        if (userType === 'owner') {
-          const sessionId = localStorage.getItem('qrguard_session')
-          if (sessionId) {
-            joinChat(chatId)
-          }
-        }
+        toast.success('✅ Chat approved! You can now start chatting.')
       }
     }
 
@@ -149,9 +166,9 @@ export const useChat = (chatId) => {
             mobileRequested: true
           }
         }))
-        toast.info('📱 Reporter has requested your mobile number', {
-          duration: 5000,
-          id: `mobile-requested-${chatId}` // Unique ID to prevent duplicates
+        toast('📱 Mobile number requested', {
+          icon: '📱',
+          duration: 4000
         })
       }
     }
@@ -167,33 +184,23 @@ export const useChat = (chatId) => {
             mobileNumber: data.mobileNumber
           }
         }))
-        toast.success('✅ Mobile number shared successfully', {
-          duration: 4000,
-          id: `mobile-approved-${chatId}` // Unique ID to prevent duplicates
-        })
+        toast.success('✅ Mobile number shared')
       }
     }
 
-    const handleChatExpired = (data) => {
+    const handleJoinedChat = (data) => {
       if (data.chatId === chatId) {
-        console.log('⌛ Chat expired:', chatId)
-        setChat(prev => ({ 
-          ...prev, 
-          status: 'expired'
-        }))
-        toast.info('Chat session has expired', {
-          id: `chat-expired-${chatId}`
-        })
+        console.log('✅ Successfully joined chat room:', chatId)
       }
     }
 
-    // Remove existing listeners first to prevent duplicates
+    // Remove existing listeners first
     socket.off('receive-message')
     socket.off('chat-ended')
     socket.off('chat-approved')
     socket.off('mobile-requested')
     socket.off('mobile-approved')
-    socket.off('chat-expired')
+    socket.off('joined-chat')
 
     // Add new listeners
     socket.on('receive-message', handleNewMessage)
@@ -201,34 +208,38 @@ export const useChat = (chatId) => {
     socket.on('chat-approved', handleChatApproved)
     socket.on('mobile-requested', handleMobileRequested)
     socket.on('mobile-approved', handleMobileApproved)
-    socket.on('chat-expired', handleChatExpired)
+    socket.on('joined-chat', handleJoinedChat)
 
     return () => {
-      console.log('🧹 Cleaning up socket listeners')
+      console.log('🧹 Cleaning up socket listeners for chat:', chatId)
       socket.off('receive-message', handleNewMessage)
       socket.off('chat-ended', handleChatEnded)
       socket.off('chat-approved', handleChatApproved)
       socket.off('mobile-requested', handleMobileRequested)
       socket.off('mobile-approved', handleMobileApproved)
-      socket.off('chat-expired', handleChatExpired)
+      socket.off('joined-chat', handleJoinedChat)
     }
-  }, [socket, chatId, joinChat])
+  }, [socket, chatId, loadChat])
 
   // Reconnect when socket reconnects
   useEffect(() => {
     if (isConnected && chatId && chat?.status === 'active') {
-      console.log('🔄 Reconnecting to chat:', chatId)
-      joinChat(chatId)
+      console.log('🔄 Reconnecting to chat on socket reconnect:', chatId)
+      const sessionId = localStorage.getItem('qrguard_session')
+      if (sessionId) {
+        joinChat(chatId, sessionId)
+      }
     }
   }, [isConnected, chatId, joinChat, chat?.status])
 
   // SEND MESSAGE FUNCTION - FIXED VERSION
   const sendMessage = useCallback(async (content, language = 'en', isPredefined = false) => {
-    console.log('📝 sendMessage called:', { 
+    console.log('📝 [HOOK] sendMessage called:', { 
       content: content?.substring(0, 50), 
       chatId, 
       chatStatus: chat?.status,
-      socketConnected: socket?.connected
+      socketConnected: socket?.connected,
+      isConnected
     })
     
     if (!content?.trim()) {
@@ -241,8 +252,8 @@ export const useChat = (chatId) => {
       return false
     }
     
-    if (!socket || !socket.connected) {
-      toast.error('Connection not established')
+    if (!socket || !isConnected) {
+      toast.error('Not connected to server. Please wait...')
       return false
     }
     
@@ -254,23 +265,28 @@ export const useChat = (chatId) => {
     const userType = localStorage.getItem('qrguard_userType')
     const sessionId = localStorage.getItem('qrguard_session')
     
-    console.log('👤 User info:', { userType, sessionId })
+    console.log('👤 User info:', { userType, sessionId, socketId: socket.id })
     
-    // Create message data with ALL required fields
+    if (!sessionId) {
+      toast.error('Session not found. Please refresh the page.')
+      return false
+    }
+
+    // Create message data
     const messageData = {
       chatId,
       senderType: userType === 'requester' ? 'requester' : 'owner',
       content: content.trim(),
       language,
       isPredefined,
-      sessionId: sessionId || 'unknown',
+      sessionId,
       timestamp: new Date().toISOString()
     }
 
-    console.log('📤 Sending message data:', messageData)
+    console.log('📤 [HOOK] Sending message via socket:', messageData)
 
     try {
-      // Create temporary message for optimistic update with consistent format
+      // Create temporary message for optimistic update
       const tempMessage = {
         _id: `temp_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
         chatId,
@@ -278,11 +294,12 @@ export const useChat = (chatId) => {
         content: messageData.content,
         language: messageData.language,
         isPredefined: messageData.isPredefined,
+        sessionId: messageData.sessionId,
         timestamp: new Date(),
-        __temp: true // Mark as temporary
+        __temp: true
       };
 
-      // Optimistic update - show message immediately
+      // Optimistic update
       setChat(prev => ({
         ...prev,
         messages: [...(prev?.messages || []), tempMessage]
@@ -290,15 +307,25 @@ export const useChat = (chatId) => {
       
       // Send via socket
       socket.emit('send-message', messageData)
-      console.log('✅ Message sent via socket')
+      
+      // Auto-remove temp message after 5 seconds if not replaced
+      setTimeout(() => {
+        setChat(prev => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            messages: prev.messages.filter(m => m._id !== tempMessage._id)
+          }
+        })
+      }, 5000)
       
       return true
     } catch (err) {
+      console.error('❌ [HOOK] Error in sendMessage:', err)
       toast.error('Failed to send message')
-      console.error('❌ Error sending message:', err)
       return false
     }
-  }, [chatId, socket, chat?.status])
+  }, [chatId, socket, isConnected, chat?.status])
 
   const endChat = useCallback(async () => {
     if (!chatId) {
@@ -313,8 +340,7 @@ export const useChat = (chatId) => {
       // Update local state
       setChat(prev => ({ 
         ...prev, 
-        status: 'completed',
-        endedAt: new Date().toISOString()
+        status: 'completed'
       }))
       
       // Emit socket event
@@ -322,8 +348,9 @@ export const useChat = (chatId) => {
         socket.emit('end-chat', { chatId })
       }
       
-      toast.success('Chat ended successfully', {
-        id: `chat-ended-${chatId}` // Unique ID to prevent duplicates
+      toast('🔒 Chat ended successfully', {
+        icon: '🔒',
+        duration: 3000
       })
       return true
     } catch (err) {
@@ -357,8 +384,9 @@ export const useChat = (chatId) => {
         socket.emit('request-mobile', { chatId })
       }
       
-      toast.success('📱 Mobile number request sent successfully', {
-        id: `mobile-request-sent-${chatId}`
+      toast('📱 Mobile number request sent', {
+        icon: '📱',
+        duration: 3000
       })
       return true
     } catch (err) {
@@ -378,7 +406,7 @@ export const useChat = (chatId) => {
       console.log('✅ Approving chat:', chatId)
       const response = await chatService.approveChatRequest(chatId, ownerName)
       
-      // Update local state immediately for better UX
+      // Update local state
       setChat(prev => ({
         ...prev,
         status: 'active',
@@ -387,26 +415,23 @@ export const useChat = (chatId) => {
           name: ownerName,
           sessionId: response.ownerSessionId || `owner_${Date.now()}`
         },
-        updatedAt: new Date().toISOString()
+        isOwnerJoined: true
       }))
       
       // Store owner session
       localStorage.setItem('qrguard_session', response.ownerSessionId || `owner_${Date.now()}`)
       
-      // Emit socket event
+      // Emit socket event and join room
       if (socket) {
         socket.emit('chat-approved', { 
           chatId, 
           ownerName,
           ownerSessionId: response.ownerSessionId || `owner_${Date.now()}`
         })
-        // Join the chat room
-        joinChat(chatId)
+        joinChat(chatId, response.ownerSessionId || `owner_${Date.now()}`)
       }
       
-      toast.success('Chat approved! You can now start chatting.', {
-        id: `chat-approved-${chatId}`
-      })
+      toast.success('✅ Chat approved! You can now start chatting.')
       return true
     } catch (err) {
       toast.error(err.message || 'Failed to approve chat')
@@ -443,9 +468,7 @@ export const useChat = (chatId) => {
         })
       }
       
-      toast.success('✅ Mobile number shared successfully', {
-        id: `mobile-shared-${chatId}`
-      })
+      toast.success('✅ Mobile number shared successfully')
       return true
     } catch (err) {
       toast.error(err.message || 'Failed to share mobile number')

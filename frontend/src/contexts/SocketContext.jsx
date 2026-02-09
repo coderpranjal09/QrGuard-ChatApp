@@ -1,159 +1,162 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from 'react'
+import React, { createContext, useState, useEffect, useCallback } from 'react'
+import PropTypes from 'prop-types'
 import { initSocket, disconnectSocket } from '../services/socketService'
 import { toast } from 'react-hot-toast'
 
-const SocketContext = createContext(null)
-
-export const useSocket = () => {
-  const context = useContext(SocketContext)
-  if (!context) {
-    throw new Error('useSocket must be used within SocketProvider')
-  }
-  return context
-}
+export const SocketContext = createContext()
 
 export const SocketProvider = ({ children }) => {
   const [socket, setSocket] = useState(null)
   const [isConnected, setIsConnected] = useState(false)
   const [reconnecting, setReconnecting] = useState(false)
+  const [connectionError, setConnectionError] = useState(null)
 
-  const initializeSocket = useCallback(() => {
-    const sessionId = localStorage.getItem('qrguard_session')
-    const userType = localStorage.getItem('qrguard_userType')
+  // Initialize socket connection
+  useEffect(() => {
+    console.log('🔌 Initializing socket connection...')
     
-    const socketInstance = initSocket(sessionId, userType)
-    setSocket(socketInstance)
+    const newSocket = initSocket()
+    setSocket(newSocket)
 
-    socketInstance.on('connect', () => {
-      console.log('✅ Socket connected in context:', socketInstance.id)
+    const handleConnect = () => {
+      console.log('✅ Socket connected:', newSocket.id)
       setIsConnected(true)
       setReconnecting(false)
-      toast.success('Connected to chat server')
-    })
+      setConnectionError(null)
+      toast.dismiss('socket-error')
+    }
 
-    socketInstance.on('disconnect', (reason) => {
+    const handleDisconnect = (reason) => {
       console.log('❌ Socket disconnected:', reason)
       setIsConnected(false)
-      toast.error('Disconnected from chat server')
       
-      if (reason === 'io server disconnect') {
-        // Server initiated disconnect, try to reconnect
-        setTimeout(() => {
-          socketInstance.connect()
-        }, 1000)
-      }
-    })
-
-    socketInstance.on('connect_error', (error) => {
-      console.error('❌ Socket connection error:', error.message)
-      setIsConnected(false)
-      if (!reconnecting) {
+      if (reason === 'io server disconnect' || reason === 'transport close') {
+        toast.error('Connection lost. Reconnecting...', {
+          id: 'socket-error',
+          duration: 5000
+        })
         setReconnecting(true)
-        setTimeout(() => {
-          socketInstance.connect()
-        }, 2000)
       }
-    })
+    }
 
-    socketInstance.on('reconnect', (attemptNumber) => {
-      console.log(`✅ Socket reconnected after ${attemptNumber} attempts`)
-      setIsConnected(true)
-      setReconnecting(false)
-      toast.success('Reconnected to chat server')
-    })
-
-    socketInstance.on('reconnect_attempt', () => {
-      console.log('🔄 Attempting to reconnect...')
+    const handleConnectError = (error) => {
+      console.error('❌ Socket connection error:', error.message)
+      setConnectionError(error.message)
       setReconnecting(true)
-    })
+      
+      toast.error('Connection error. Trying to reconnect...', {
+        id: 'socket-error',
+        duration: 5000
+      })
+    }
 
-    socketInstance.on('reconnect_failed', () => {
+    const handleReconnect = (attempt) => {
+      console.log(`🔄 Reconnecting attempt ${attempt}`)
+      setReconnecting(true)
+    }
+
+    const handleReconnectError = (error) => {
+      console.error('❌ Reconnection error:', error)
+    }
+
+    const handleReconnectFailed = () => {
       console.error('❌ Reconnection failed')
+      toast.error('Failed to reconnect. Please refresh the page.', {
+        id: 'socket-error',
+        duration: 6000
+      })
       setReconnecting(false)
-      toast.error('Failed to reconnect. Please refresh the page.')
-    })
+    }
 
-    socketInstance.on('error', (error) => {
-      console.error('❌ Socket error:', error)
-      toast.error(error.message || 'Socket error occurred')
-    })
+    // Add event listeners
+    newSocket.on('connect', handleConnect)
+    newSocket.on('disconnect', handleDisconnect)
+    newSocket.on('connect_error', handleConnectError)
+    newSocket.on('reconnect', handleReconnect)
+    newSocket.on('reconnect_error', handleReconnectError)
+    newSocket.on('reconnect_failed', handleReconnectFailed)
 
-    return socketInstance
-  }, [reconnecting])
-
-  useEffect(() => {
-    const socketInstance = initializeSocket()
-
+    // Cleanup function
     return () => {
-      if (socketInstance) {
-        socketInstance.off('connect')
-        socketInstance.off('disconnect')
-        socketInstance.off('connect_error')
-        socketInstance.off('reconnect')
-        socketInstance.off('reconnect_attempt')
-        socketInstance.off('reconnect_failed')
-        socketInstance.off('error')
+      console.log('🧹 Cleaning up socket connection')
+      newSocket.off('connect', handleConnect)
+      newSocket.off('disconnect', handleDisconnect)
+      newSocket.off('connect_error', handleConnectError)
+      newSocket.off('reconnect', handleReconnect)
+      newSocket.off('reconnect_error', handleReconnectError)
+      newSocket.off('reconnect_failed', handleReconnectFailed)
+      
+      if (newSocket.connected) {
         disconnectSocket()
       }
     }
-  }, [initializeSocket])
+  }, [])
 
-  const joinChat = useCallback((chatId) => {
-    if (socket && socket.connected) {
-      socket.emit('join-chat', chatId)
-      console.log(`✅ Joined chat: ${chatId}`)
-    } else {
-      console.error('⚠️ Cannot join chat: socket not connected')
-      toast.error('Cannot join chat - connection lost')
-    }
-  }, [socket])
-
-  const sendMessage = useCallback((messageData) => {
-    if (socket && socket.connected && messageData) {
-      console.log('📤 Emitting message via socket:', messageData)
-      socket.emit('send-message', messageData)
-      return true
-    } else {
-      console.error('❌ Socket not connected')
-      toast.error('Connection lost. Please refresh the page.')
+  // Join chat room function
+  const joinChat = useCallback((chatId, sessionId) => {
+    if (!socket || !isConnected) {
+      console.log('⚠️ Cannot join chat: socket not connected')
       return false
     }
-  }, [socket])
 
-  const approveChat = useCallback((chatId, ownerName, ownerSessionId) => {
-    if (socket && socket.connected) {
-      socket.emit('approve-chat', { chatId, ownerName, ownerSessionId })
-      return true
+    if (!chatId) {
+      console.error('❌ Cannot join chat: chatId is required')
+      return false
     }
-    return false
-  }, [socket])
 
-  const reconnect = useCallback(() => {
-    if (socket) {
-      socket.connect()
-    }
-  }, [socket])
+    console.log(`🎯 Joining chat room: ${chatId} with session: ${sessionId}`)
+    
+    const userSessionId = sessionId || localStorage.getItem('qrguard_session')
+    
+    socket.emit('join-chat', {
+      chatId,
+      sessionId: userSessionId
+    })
+    
+    return true
+  }, [socket, isConnected])
 
-  const disconnect = useCallback(() => {
-    if (socket) {
-      socket.disconnect()
+  // Send message function
+  const sendMessage = useCallback((messageData) => {
+    if (!socket || !isConnected) {
+      console.error('❌ Cannot send message: socket not connected')
+      return false
     }
-  }, [socket])
+
+    if (!messageData.chatId || !messageData.content) {
+      console.error('❌ Cannot send message: missing required data')
+      return false
+    }
+
+    console.log('📤 Sending message via socket:', messageData)
+    socket.emit('send-message', messageData)
+    return true
+  }, [socket, isConnected])
+
+  const value = {
+    socket,
+    isConnected,
+    reconnecting,
+    connectionError,
+    joinChat,
+    sendMessage
+  }
 
   return (
-    <SocketContext.Provider
-      value={{
-        socket,
-        isConnected,
-        reconnecting,
-        joinChat,
-        sendMessage,
-        approveChat,
-        reconnect,
-        disconnect,
-      }}
-    >
+    <SocketContext.Provider value={value}>
       {children}
     </SocketContext.Provider>
   )
+}
+
+SocketProvider.propTypes = {
+  children: PropTypes.node.isRequired
+}
+
+export const useSocket = () => {
+  const context = React.useContext(SocketContext)
+  if (!context) {
+    throw new Error('useSocket must be used within SocketProvider')
+  }
+  return context
 }
