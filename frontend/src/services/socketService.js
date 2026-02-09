@@ -4,7 +4,7 @@ let socket = null
 
 export const initSocket = () => {
   if (!socket) {
-    const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://qrguard-chatapp.onrender.com/api'
+    const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'https://qrguard-chatapp.onrender.com'
     
     socket = io(SOCKET_URL, {
       transports: ['websocket', 'polling'],

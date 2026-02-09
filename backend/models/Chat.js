@@ -9,7 +9,7 @@ const messageSchema = new mongoose.Schema({
   },
   senderType: {
     type: String,
-    enum: ['requester', 'owner'],
+    enum: ['requester', 'owner', 'system'],
     required: true
   },
   content: {
@@ -50,7 +50,7 @@ const chatSchema = new mongoose.Schema({
   status: {
     type: String,
     enum: ['pending', 'active', 'completed', 'expired', 'rejected'],
-    default: 'pending'
+    default: 'active' // CHANGED: Default to active
   },
   requester: {
     sessionId: {
@@ -70,8 +70,23 @@ const chatSchema = new mongoose.Schema({
   },
   owner: {
     sessionId: String,
-    name: String
+    name: String,
+    joinedAt: Date
   },
+  // NEW FIELDS:
+  isOwnerJoined: {
+    type: Boolean,
+    default: false
+  },
+  lastActivity: {
+    type: Date,
+    default: Date.now
+  },
+  reporterSessionId: {
+    type: String,
+    default: ''
+  },
+  // END NEW FIELDS
   messages: [messageSchema],
   createdAt: {
     type: Date,
